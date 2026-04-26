@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"geerpc"
 	"log"
 	"net"
@@ -9,8 +8,22 @@ import (
 	"time"
 )
 
+type Foo int
+
+type Args struct{ Num1, Num2 int }
+
+// 3 parameters 1 error
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
+	return nil
+}
+
 // 启动rpc服务端
 func startServer(addr chan string) {
+	var foo Foo
+	if err := geerpc.Register(&foo); err != nil {
+		log.Fatal("register error:", err)
+	}
 	// pick a free port
 	// Listen(network, address string) (Listener, error)
 	l, err := net.Listen("tcp", ":0")
@@ -18,7 +31,7 @@ func startServer(addr chan string) {
 		log.Fatal("network error:", err)
 	}
 	//l.Addr () = 拿到服务器的地址（IP + 端口）
-	//	log.Println("start rpc server on", l.Addr())
+	log.Println("start rpc server on", l.Addr())
 	//l.Addr().String() = 把它变成字符串
 	addr <- l.Addr().String()
 	//func Accept(lis net.Listener) = 启动服务
@@ -32,7 +45,7 @@ func main() {
 	// 启动服务端（协程）
 	go startServer(addr)
 
-	// 连接 TCP 服务器
+	// 连接 RPC 服务器
 	//conn, _ := net.Dial("tcp", <-addr)
 	client, err := geerpc.Dial("tcp", <-addr)
 	if err != nil {
@@ -52,13 +65,13 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 			//构造请求参数
-			args := fmt.Sprintf("geerpc req %d", i)
-			var reply string
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
 			//远程调用RPC方法Foo.Sum
 			if err := client.Call("Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call Foo.Sum error ", err)
 			}
-			log.Println("reply:", reply)
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
 		}(i)
 	}
 	wg.Wait()
