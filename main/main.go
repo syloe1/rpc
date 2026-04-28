@@ -5,6 +5,7 @@ import (
 	"geerpc"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -36,7 +37,9 @@ func startServer(addr chan string) {
 	//l.Addr().String() = 把它变成字符串
 	addr <- l.Addr().String()
 	//func Accept(lis net.Listener) = 启动服务
-	geerpc.Accept(l)
+	//geerpc.Accept(l)
+	geerpc.HandleHTTP()
+	_ = http.Serve(l, nil)
 }
 
 func main() {
@@ -48,7 +51,7 @@ func main() {
 
 	// 连接 RPC 服务器
 	//conn, _ := net.Dial("tcp", <-addr)
-	client, err := geerpc.Dial("tcp", <-addr)
+	client, err := geerpc.DialHTTP("tcp", <-addr)
 	if err != nil {
 		log.Fatal("dial error:", err)
 	}
