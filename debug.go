@@ -28,6 +28,7 @@ const debugText = `<html>
 
 var debug = template.Must(template.New("RPC debug").Parse(debugText))
 
+// 给Server套一层HTTP接口
 type debugHTTP struct {
 	*Server
 }
@@ -38,6 +39,7 @@ type debugService struct {
 }
 
 // Runs at /debug/geerpc
+// HTTP接口处理函数
 func (server debugHTTP) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Build a sorted version of the data.
 	var services []debugService

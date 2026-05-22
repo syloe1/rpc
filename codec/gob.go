@@ -18,11 +18,16 @@ type GobCodec struct {
 }
 
 // 实现Codec接口
-// ReadHeader reads the header of the RPC message from the connection.
-// ReadBody reads the body of the RPC message from the connection.
-// Write writes the header and body of the RPC message to the connection.
+// GobCodec 必须实现 Codec 接口，缺少方法编译直接报错。
 var _ Codec = (*GobCodec)(nil)
 
+/*
+READ （服务端接收）
+	网络数据 → conn → gob 解码器 → 变成 Header / Body
+
+Write 写流程（客户端发送）
+	Header + Body → gob 编码器 → 写入缓冲 → 最后 Flush → 网络发送
+*/
 // 参数 + 返回值一样 = 自动符合类型
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
 	//写缓冲满了给conn去发送
@@ -54,6 +59,25 @@ func (c *GobCodec) ReadBody(body interface{}) error {
 	return c.dec.Decode(body)
 }
 
+// 进入 Write()
+
+// defer 注册
+
+// Encode(header)
+// Encode(body)
+
+// return nil
+
+// ↓
+// 执行 defer
+
+// Flush()
+
+// ↓
+// 真正发送网络
+
+// ↓
+// 返回 nil
 func (c *GobCodec) Write(h *Header, body interface{}) (err error) {
 	defer func() {
 		//刷新缓冲，把数据真正发送到网络
@@ -87,6 +111,11 @@ func (c *GobCodec) Close() error {
 write使用buf不是conn, 写缓冲批量发送，先放缓冲，
 编码Header + Body放缓冲， 最后一次Flush发送，
 减少网络系统调用，提升性能
+buf 作用
+不直接写网络
+先攒到缓冲区
+最后一次性 Flush() 发送
+减少系统调用，提升性能
 
 
 为什么derfer里面flush，无论编解码是否error,最后都能刷新/清理
