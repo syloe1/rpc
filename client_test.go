@@ -1,116 +1,87 @@
-package geerpc
+// Copyright 2014 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package rpc
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"net"
-	"os"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
-func assertClient(condition bool, msg string, v ...interface{}) {
-	if !condition {
-		panic(fmt.Sprintf("assertion failed: "+msg, v...))
-	}
+type shutdownCodec struct {
+	responded chan int
+	closed    bool
 }
 
-func TestClient_dialTimeout(t *testing.T) {
-	t.Parallel()
-
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = l.Close() }()
-
-	f := func(conn net.Conn, opt *Option) (client *Client, err error) {
-		_ = conn.Close()
-		time.Sleep(2 * time.Second)
-		return nil, nil
-	}
-
-	t.Run("timeout", func(t *testing.T) {
-		_, err := dialTimeout(f, "tcp", l.Addr().String(), &Option{ConnectTimeout: time.Second})
-		assertClient(err != nil && strings.Contains(err.Error(), "connect timeout"), "expect a timeout error")
-	})
-
-	t.Run("zero means no limit", func(t *testing.T) {
-		_, err := dialTimeout(f, "tcp", l.Addr().String(), &Option{ConnectTimeout: 0})
-		assertClient(err == nil, "expect no timeout error")
-	})
+func (c *shutdownCodec) WriteRequest(*Request, any) error { return nil }
+func (c *shutdownCodec) ReadResponseBody(any) error       { return nil }
+func (c *shutdownCodec) ReadResponseHeader(*Response) error {
+	c.responded <- 1
+	return errors.New("shutdownCodec ReadResponseHeader")
 }
-
-type Bar int
-
-func (b Bar) Timeout(argv int, reply *int) error {
-	time.Sleep(2 * time.Second)
+func (c *shutdownCodec) Close() error {
+	c.closed = true
 	return nil
 }
 
-func startServer(addr chan string) {
-	var b Bar
-	_ = Register(&b)
-	l, _ := net.Listen("tcp", ":0")
-	addr <- l.Addr().String()
-	Accept(l)
-}
-
-func TestClient_Call(t *testing.T) {
-	t.Parallel()
-
-	addrCh := make(chan string)
-	go startServer(addrCh)
-	addr := <-addrCh
-	time.Sleep(time.Second)
-
-	t.Run("client timeout", func(t *testing.T) {
-		client, err := Dial("tcp", addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = client.Close() }()
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		var reply int
-		err = client.Call(ctx, "Bar.Timeout", 1, &reply)
-		assertClient(err != nil && strings.Contains(err.Error(), ctx.Err().Error()), "expect a timeout error")
-	})
-
-	t.Run("server handle timeout", func(t *testing.T) {
-		client, err := Dial("tcp", addr, &Option{
-			HandleTimeout: time.Second,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = client.Close() }()
-
-		var reply int
-		err = client.Call(context.Background(), "Bar.Timeout", 1, &reply)
-		assertClient(err != nil && strings.Contains(err.Error(), "handle timeout"), "expect a timeout error")
-	})
-}
-
-func TestXDial(t *testing.T) {
-	if runtime.GOOS == "linux" {
-		ch := make(chan struct{})
-		addr := "/tmp/geerpc.sock"
-		go func() {
-			_ = os.Remove(addr)
-			l, err := net.Listen("unix", addr)
-			if err != nil {
-				t.Fatal("failed to listen unix socket")
-			}
-			ch <- struct{}{}
-			Accept(l)
-		}()
-		<-ch
-		_, err := XDial("unix@" + addr)
-		_assert(err == nil, "failed to connect unix socket")
+func TestCloseCodec(t *testing.T) {
+	codec := &shutdownCodec{responded: make(chan int)}
+	client := NewClientWithCodec(codec)
+	<-codec.responded
+	client.Close()
+	if !codec.closed {
+		t.Error("client.Close did not close codec")
 	}
+}
+
+// Test that errors in gob shut down the connection. Issue 7689.
+
+type R struct {
+	msg []byte // Not exported, so R does not work with gob.
+}
+
+type S struct{}
+
+func (s *S) Recv(nul *struct{}, reply *R) error {
+	*reply = R{[]byte("foo")}
+	return nil
+}
+
+func TestGobError(t *testing.T) {
+	defer func() {
+		err := recover()
+		if err == nil {
+			t.Fatal("no error")
+		}
+		if !strings.Contains(err.(error).Error(), "reading body unexpected EOF") {
+			t.Fatal("expected `reading body unexpected EOF', got", err)
+		}
+	}()
+	Register(new(S))
+
+	listen, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	go Accept(listen)
+
+	client, err := Dial("tcp", listen.Addr().String())
+	if err != nil {
+		panic(err)
+	}
+
+	var reply Reply
+	err = client.Call("S.Recv", &struct{}{}, &reply)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%#v\n", reply)
+	client.Close()
+
+	listen.Close()
 }
